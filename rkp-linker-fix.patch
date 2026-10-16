@@ -1,0 +1,37 @@
+diff --git a/crates/duck-rkp-device/src/keymint.rs b/crates/duck-rkp-device/src/keymint.rs
+--- a/crates/duck-rkp-device/src/keymint.rs
++++ b/crates/duck-rkp-device/src/keymint.rs
+@@ -24,10 +24,24 @@ struct Session {
+     destructor: Destructor,
+     send: SendCommand,
+     _library: Library,
++    _system_cpp: Library,
+ }
+ impl Session {
+     fn open() -> Result<Self> {
++        // On some Android 17 vendor builds, loading KeymasterUtils pulls in
++        // /system/lib64/liblog.so while the vendor C++ runtime is also visible.
++        // liblog requires std::__1::__hash_memory, exported by the system
++        // libc++.so but not necessarily by the vendor copy. Make the system
++        // runtime's symbols globally visible in this disposable worker before
++        // opening the vendor library. Keep the handle alive for the session.
++        // This is a targeted workaround, not a substitute for linker namespace
++        // compatibility; it may not work on every firmware.
++        let system_cpp: Library = unsafe {
++            libloading::os::unix::Library::open(
++                Some("/system/lib64/libc++.so"),
++                libc::RTLD_NOW | libc::RTLD_GLOBAL,
++            )
++        }
++        .context("preload system libc++ for KeymasterUtils")?
++        .into();
+         // SAFETY: only this adapter resolves the fixed vendor ABI. It is called only
+         // on Android arm64 and in an isolated worker; unsupported firmware may fail.
+         let library: Library = unsafe {
+@@ -59,6 +73,7 @@ impl Session {
+             destructor,
+             send,
+             _library: library,
++            _system_cpp: system_cpp,
+         })
+     }
