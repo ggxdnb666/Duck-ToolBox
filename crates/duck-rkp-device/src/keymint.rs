@@ -27,10 +27,25 @@ struct Session {
     destructor: Destructor,
     send: SendCommand,
     _library: Library,
+    _system_cpp: Library,
 }
 
 impl Session {
     fn open() -> Result<Self> {
+        // Experimental Android 17 workaround: system liblog.so requires a C++
+        // symbol that may not be exported by the vendor C++ runtime. Export the
+        // system libc++ symbols to the worker's global lookup scope before
+        // loading the Qualcomm Keymaster library. This may not cross linker
+        // namespaces on every firmware.
+        let system_cpp: Library = unsafe {
+            libloading::os::unix::Library::open(
+                Some("/system/lib64/libc++.so"),
+                libc::RTLD_NOW | libc::RTLD_GLOBAL,
+            )
+        }
+        .context("preload system libc++ for KeymasterUtils")?
+        .into();
+
         // SAFETY: only this adapter resolves the fixed vendor ABI. It is called only
         // on Android arm64 and in an isolated worker; unsupported firmware may fail.
         let library: Library = unsafe {
@@ -63,6 +78,7 @@ impl Session {
             destructor,
             send,
             _library: library,
+            _system_cpp: system_cpp,
         })
     }
 
