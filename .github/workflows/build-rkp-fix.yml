@@ -1,0 +1,59 @@
+name: Build Duck ToolBox RKP Fix
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply RKP patch
+        run: git apply --check rkp-linker-fix.patch && git apply rkp-linker-fix.patch
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: aarch64-linux-android
+          cache: true
+      - uses: android-actions/setup-android@v3
+      - name: Build Android backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$TOOLCHAIN/aarch64-linux-android35-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$TOOLCHAIN/aarch64-linux-android35-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$TOOLCHAIN/llvm-ar" >> "$GITHUB_ENV"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android35-clang"
+          cargo build --locked --release --package duckd --target aarch64-linux-android
+          mkdir -p module/bin
+          cp target/aarch64-linux-android/release/duckd module/bin/duckd
+          chmod 755 module/bin/duckd
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build WebUI
+        shell: bash
+        run: |
+          set -euo pipefail
+          corepack enable
+          cd ui
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Package KernelSU module
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f module/module.prop
+          test -s module/bin/duckd
+          test -f module/bin/duckctl.sh
+          mkdir -p dist
+          cd module
+          zip -qry ../dist/duck-toolbox-rkp-fix-arm64.zip .
+          cd ..
+          unzip -l dist/duck-toolbox-rkp-fix-arm64.zip | grep -E 'module.prop|bin/duckd'
+          sha256sum dist/*.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duck-toolbox-rkp-fix-arm64
+          path: dist/duck-toolbox-rkp-fix-arm64.zip
+          if-no-files-found: error
